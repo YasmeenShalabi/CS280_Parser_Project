@@ -1,0 +1,572 @@
+/* Implementation of Recursive-Descent Parser
+	for a Simple Pasacal-Like Language
+ * parser.cpp
+ * Programming Assignment 2
+ * Fall 2023
+*/
+
+#include "parser.h"
+
+
+map<string, bool> defVar;
+map<string, Token> SymTable;
+
+namespace Parser {
+	bool pushed_back = false;
+	LexItem	pushed_token;
+
+	static LexItem GetNextToken(istream& in, int& line) {
+		if( pushed_back ) {
+			pushed_back = false;
+			return pushed_token;
+		}
+		return getNextToken(in, line);
+	}
+
+	static void PushBackToken(LexItem & t) {
+		if( pushed_back ) {
+			abort();
+		}
+		pushed_back = true;
+		pushed_token = t;	
+	}
+
+}
+
+static int error_count = 0;
+
+int ErrCount()
+{
+    return error_count;
+}
+
+void ParseError(int line, string msg)
+{
+	++error_count;
+	cout << line << ": " << msg << endl;
+}
+
+//WriteLnStmt ::= writeln (ExprList) 
+bool WriteLnStmt(istream& in, int& line) {
+	LexItem t;
+	//cout << "in WriteLnStmt" << endl;
+	
+	t = Parser::GetNextToken(in, line);
+	if( t != LPAREN ) {		
+		ParseError(line, "Missing Left Parenthesis.");
+		return false;
+	}
+	
+	bool ex = ExprList(in, line);
+	
+	if( !ex ) {
+		ParseError(line, "Missing expression list for WriteLn statement.");
+		return false;
+	}
+	
+	t = Parser::GetNextToken(in, line);
+	if(t != RPAREN ) {
+		
+		ParseError(line, "Missing Right Parenthesis.");
+		return false;
+	}
+	//Evaluate: print out the list of expressions values
+
+	return ex;
+}//End of WriteLnStmt
+
+
+//ExprList:= Expr {,Expr}
+bool ExprList(istream& in, int& line) {
+	bool status = false;
+	status = Expr(in, line);
+	if(!status){
+		ParseError(line, "Missing Expression");
+		return false;
+	}
+	LexItem tok = Parser::GetNextToken(in, line);
+	if (tok == COMMA) {
+		status = ExprList(in, line);
+	}
+	else if(tok.GetToken() == ERR){
+		ParseError(line, "Unrecognized Input Pattern");
+		cout << "(" << tok.GetLexeme() << ")" << endl;
+		return false;
+	}
+	else{
+		Parser::PushBackToken(tok);
+		return true;
+	}
+	return status;
+}//ExprList
+
+
+//Prog ::= PROGRAM IDENT ; DeclPart CompoundStmt . 
+bool Prog(istream& in, int& line){ 
+	 LexItem tok= Parser::GetNextToken(in, line);
+    if (tok != PROGRAM){
+        ParseError(line, "Missing Program");
+        return false;
+    }
+    tok= Parser::GetNextToken(in, line);
+    if (tok != IDENT){
+        ParseError(line, "Missing IDENT");
+        return false;
+    }
+    tok= Parser::GetNextToken(in, line);
+    if (tok != SEMICOL){
+        ParseError(line, "Missing SEMICOL");
+        return false;
+    }
+    bool status=DeclPart(in, line);
+    if (!status){
+        ParseError(line, "Missing DeclPart");
+        return false;
+    }
+    status=CompoundStmt(in, line);
+    if (!status){
+        ParseError(line, "Missing CompoundStmt");
+        return false;
+    }
+    tok= Parser::GetNextToken(in, line);
+    if (tok != DOT){
+        ParseError(line, "Missing DOT");
+        return false;
+    }
+     return true;
+}
+
+
+//LogAndExpr ::= RelExpr {AND RelExpr }
+bool LogANDExpr(istream& in, int& line){ 
+	bool status = RelExpr(in, line);
+    if (!status) {
+        ParseError(line, "Missing RelExpr.");
+        return false;
+    }
+    while (true) {
+        LexItem tok = Parser::GetNextToken(in, line);
+
+        if (tok == AND) {
+            status = RelExpr(in, line);
+
+            if (!status) {
+                ParseError(line, "Missing RelExpr after AND.");
+                return false;
+            }
+        } else {
+            Parser::PushBackToken(tok);
+            break; // Exit loop when AND is not found
+        }
+    }
+
+    return true;
+}
+
+
+//Expr ::= LogOrExpr ::= LogAndExpr { OR LogAndExpr }
+bool Expr(istream& in, int& line){ 
+	  bool status = LogANDExpr(in, line);
+    if (!status) {
+        ParseError(line, "Missing LogAndExpr");
+        return false;
+    }
+    while (true) {
+        LexItem tok = Parser::GetNextToken(in, line);
+        if (tok == OR) {
+            status = LogANDExpr(in, line);
+
+            if (!status) {
+                ParseError(line, "Missing LogAndExpr after OR");
+                return false;
+            }
+        } else {
+            Parser::PushBackToken(tok);
+            break; // Exit loop when OR is not found
+        }
+    }
+    return true;
+}
+
+
+
+//DeclPart ::= VAR DeclStmt; { DeclStmt ; }
+bool DeclPart(istream& in, int& line){
+    LexItem tok = Parser::GetNextToken(in, line);
+    if (tok != VAR) {
+        ParseError(line, "Missing VAR");
+        return false;
+    }
+    bool status= DeclStmt(in,line);
+    if (!status) {
+        ParseError(line, "Missing DeclStmt");
+        return false;
+    }
+    return true;
+}
+
+
+// DeclStmt ::= IDENT {, IDENT } : Type [:= Expr]
+bool DeclStmt(istream& in, int& line){
+    bool status = false;
+    LexItem tok = Parser::GetNextToken(in, line);
+    if (tok != IDENT) {
+        return false;
+    }
+    string variable = tok.GetLexeme();
+    auto iterator = defVar.find(variable);
+    if (iterator != defVar.end()) {
+        ParseError(line, "Variable Redefinition");
+        return false;
+    }
+    defVar[variable] = false;
+    tok = Parser::GetNextToken(in, line);
+    if (tok == COMMA) {
+        status = DeclStmt(in, line);
+    } else {
+        if (tok != COLON) {
+            ParseError(line, "Missing Colon");
+            return false;
+        }
+        // Type
+        LexItem t = Parser::GetNextToken(in, line);
+        if (t != INTEGER && t != REAL && t != BOOLEAN && t != STRING) {
+            ParseError(line, "Wrong Type");
+            return false;
+        }
+        t = Parser::GetNextToken(in, line);
+        if (t == ASSOP) {
+            status = Expr(in, line);
+            if (!status) {
+                ParseError(line, "Wrong initialization");
+                return false;
+            }
+            t = Parser::GetNextToken(in, line);
+        }
+        if (t != SEMICOL) {
+            ParseError(line, "Missing semicolon.");
+            return false;
+        }
+
+        for (const auto &entry : defVar) {
+            if (!entry.second) {
+                defVar[entry.first] = true;
+                SymTable[entry.first] = t.GetToken();
+            }
+        }
+        tok = Parser::GetNextToken(in, line);
+        if (tok != BEGIN) {
+            Parser::PushBackToken(tok);
+            status = DeclStmt(in, line);
+        } else {
+            status = true;
+        }
+    }
+    return status;
+}
+
+
+//CompoundStmt ::= BEGIN Stmt {; Stmt } END
+bool CompoundStmt(istream& in, int& line){
+    LexItem tok;
+    bool status= Stmt(in, line);
+    if(!status){
+        ParseError(line, "Missing Stmt");
+        return false;
+    }
+    while (true){
+    tok= Parser::GetNextToken(in, line);
+    if (tok == SEMICOL){
+        status=CompoundStmt(in,line);
+            if(!status){
+                ParseError(line, "Missing Stmt after SEMICOL");
+                return false;
+            }
+    }
+        else{
+            Parser::PushBackToken(tok);
+            break;
+        }
+    }
+    tok= Parser::GetNextToken(in, line);
+    if (tok != END){
+        ParseError(line, "Missing END");
+        return false;
+    }
+    else{
+        return true;
+    }
+}
+
+
+// Stmt ::= SimpleStmt | StructuredStmt 
+bool Stmt(istream& in, int& line){ 
+	bool status;
+	LexItem tok= Parser::GetNextToken(in, line);
+	Parser::PushBackToken(tok);
+
+	if (tok == IF || tok == BEGIN){
+		status = StructuredStmt(in, line);
+	}
+	else if (tok == WRITE || tok == WRITELN  || tok == IDENT){ 
+		status = SimpleStmt(in, line);
+		}
+	return status;
+}
+
+
+// RelExpr ::= SimpleExpr [ ( = | < | > ) SimpleExpr ]
+bool RelExpr(istream& in, int& line){ 
+	 bool status = SimpleExpr(in, line);
+    if (!status) {
+        ParseError(line, "Missing SimpleExpr");
+        return false;
+    }
+    LexItem tok = Parser::GetNextToken(in, line);
+    if (tok == EQ || tok == LTHAN || tok == GTHAN) {
+        status = SimpleExpr(in, line);
+        if (!status) {
+            ParseError(line, "Missing Simple Expr after Relationship Operator.");
+            return false;
+        }
+    } else {
+        Parser::PushBackToken(tok);
+        return true;  
+    }
+    return true;
+}
+
+
+//SimpleExpr :: Term { ( + | - ) Term }
+bool SimpleExpr(istream& in, int& line){ 
+    bool status = Term(in, line);
+    if (!status) {
+		ParseError(line, "Missing Term in SimpleExpr.");
+		return false;
+	} 
+    while (true){
+        LexItem tok = Parser::GetNextToken(in, line);
+        if (tok == PLUS || tok ==  MINUS ) {
+            status = Term(in, line);
+            if (!status) {
+                ParseError(line, "Missing Term after operator");
+                return false;
+            }
+        }
+        else Parser::PushBackToken(tok);
+        return true;
+}
+    return true;
+}
+
+
+// SimpleStmt ::= AssignStmt | WriteLnStmt | WriteStmt
+bool SimpleStmt(istream& in, int& line){ 
+	LexItem t = Parser::GetNextToken(in, line);
+    switch (t.GetToken()) {
+        case WRITE:
+            if (!WriteStmt(in, line)) {
+                ParseError(line, "Incorrect Write-Statement.");
+                return false;
+            }
+            break;
+        case IDENT:
+            Parser::PushBackToken(t);
+            if (!AssignStmt(in, line)) {
+                ParseError(line, "Incorrect Assignment Statement.");
+                return false;
+            }
+            break;
+        case WRITELN:
+            if (!WriteLnStmt(in, line)) {
+                ParseError(line, "Incorrect Writeln Statement.");
+                return false;
+            }
+            break;
+        default:
+            Parser::PushBackToken(t);
+            return false;
+    }
+    return true;
+}
+
+
+// StructuredStmt ::= IfStmt | CompoundStmt
+bool StructuredStmt(istream& in, int& line){ 
+	LexItem tok= Parser::GetNextToken(in, line);
+    bool status;
+	if (tok == IF){
+	    status = IfStmt(in, line);
+	}
+	else { 
+		status= CompoundStmt(in, line);
+	}
+	return status;
+}
+
+
+//AssignStmt ::= Var := Expr
+bool AssignStmt(istream& in, int& line){ 
+	bool status = Var(in, line);
+	if (!status){
+		ParseError(line, "Missing Var");
+		return false;
+	}
+	LexItem t = Parser::GetNextToken(in, line);
+	if (t != ASSOP){
+		ParseError(line, "Missing Assignment Operator");
+		return false;
+	}
+	status = Expr(in, line);
+	if (!status){
+		ParseError(line, "Missing Expr");
+		return false;
+	}
+	return status;
+}
+
+
+//Var ::= IDENT
+bool Var(istream& in, int& line){ 
+    LexItem tok= Parser::GetNextToken(in, line);
+	if (tok.GetToken() != IDENT){
+		return false;
+	}
+	auto iterator = defVar.find(tok.GetLexeme());
+	if (iterator == defVar.end()){
+		ParseError(line, "Undeclared var");
+		return false;
+	}
+	return true;
+}
+
+
+//WriteStmt ::= write (ExprList) 
+bool WriteStmt(istream& in, int& line){ 
+    	LexItem tok = Parser::GetNextToken(in, line);
+	if( tok != LPAREN ) {
+		ParseError(line, "Missing Left Parenthesis");
+		return false;
+	}
+	bool ex = ExprList(in, line);
+	if( !ex ) {
+		ParseError(line, "Missing expression list for Write statement");
+		return false;
+	}
+	
+	tok = Parser::GetNextToken(in, line);
+	if(tok != RPAREN ) {
+		ParseError(line, "Missing Right Parenthesis");
+		return false;
+	}
+	//Evaluate: print out the list of expressions values
+	return ex;
+}
+
+
+// IfStmt ::= IF Expr THEN Stmt [ ELSE Stmt ]
+bool IfStmt(istream& in, int& line){
+    bool status = Expr(in, line);
+    if (!status) {
+        ParseError(line, "Missing Expr");
+        return false;
+    }
+    LexItem tok = Parser::GetNextToken(in, line);
+    if (tok != THEN) {
+        ParseError(line, "Missing THEN");
+        return false;
+    }
+    status = Stmt(in, line);
+    if (!status) {
+        ParseError(line, "Missing Stmt");
+        return false;
+    }
+    tok = Parser::GetNextToken(in, line);
+    if (tok == ELSE) {
+        status = Stmt(in, line);
+        if (!status) {
+            ParseError(line, "Missing Stmt after ELSE");
+            return false;
+        }
+    } else {
+        Parser::PushBackToken(tok);
+    }
+    return true;
+}
+
+
+// Term ::= SFactor { ( * | / | DIV | MOD ) SFactor }
+bool Term(istream& in, int& line){ 
+    bool status = SFactor(in, line);
+    if (!status) {
+        ParseError(line, "Missing SFactor");
+        return false;
+    }
+    while (true) {
+        LexItem tok = Parser::GetNextToken(in, line);
+        if (tok.GetToken() == MULT || tok.GetToken() == IDIV || tok.GetToken() == DIV || tok.GetToken() == MOD) {
+            status = SFactor(in, line);
+            if (!status) {
+                ParseError(line, "Missing operand after operator");
+                return false;
+            }
+        } else {
+            Parser::PushBackToken(tok);
+            break;
+        }
+    }
+    return true;
+}
+
+
+//Factor ::= IDENT | ICONST | RCONST | SCONST | BCONST | (Expr)
+bool Factor(istream& in, int& line, int sign){  
+     LexItem t = Parser::GetNextToken(in, line);
+    if (t != IDENT && t != ICONST && t != RCONST && t != SCONST && t != BCONST) {
+		if (t.GetToken() != LPAREN) {
+			ParseError(line, "Missing Left Parenthesis.");
+			return false;
+		}
+
+		bool ex = Expr(in, line);
+		if (!ex) {
+			ParseError(line, "Missing expression after parenthesis.");
+			return false;
+		}
+
+		t = Parser::GetNextToken(in, line);
+		if (t.GetToken() != RPAREN) {
+			ParseError(line, "Missing Right Parenthesis.");
+			return false;
+		}
+	}
+	if (t == IDENT) {
+		if (!(defVar.find(t.GetLexeme())->second) || defVar[t.GetLexeme()] == false) {
+            ParseError(line, "Using Undefined Variable");
+            return false;
+        }
+	}
+    return true;
+}
+
+
+//SFactor ::= [( - | + | NOT )] Factor
+bool SFactor(istream& in, int& line){
+    int sign = 0;
+    bool isNot = false; 
+    LexItem t = Parser::GetNextToken(in, line);
+    if (t.GetToken() == MINUS) {
+        sign = -1;
+    } else if (t.GetToken() == PLUS) {
+        sign = 1;
+    } else if (t.GetToken() == NOT) {
+        isNot = true;
+    } else {
+        Parser::PushBackToken(t);
+    }
+    if (isNot) {
+        sign = -sign; 
+    }
+
+    return Factor(in, line, sign);
+}
